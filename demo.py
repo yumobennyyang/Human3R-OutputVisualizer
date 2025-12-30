@@ -398,9 +398,9 @@ def prepare_output(
     # K_mhmr = [output.get(
     #     "K_mhmr", torch.empty(1,0,3))[0] for output in outputs["views"]]
         
-    if render:
+    if render or save:
         smpl_scores = [
-            output["smpl_scores"][...,0] for output in outputs["pred"]]
+            output.get("smpl_scores", torch.zeros(1, H, W, 1))[...,0] for output in outputs["pred"]]
         if img_res is not None:
             smpl_scores = [
                 unpad_image(s, [H, W])[0] for s in smpl_scores]
@@ -422,6 +422,7 @@ def prepare_output(
     smpl_faces = smpl_layer.bm_x.faces
 
     if save:
+        print(f"Saving output to {outdir}...")
         os.makedirs(os.path.join(outdir, "depth"), exist_ok=True)
         os.makedirs(os.path.join(outdir, "conf"), exist_ok=True)
         os.makedirs(os.path.join(outdir, "color"), exist_ok=True)
@@ -509,6 +510,7 @@ def prepare_output(
             )
 
     if render and render_video:
+        print(f"Saving smpl mesh projection to {outdir}...")
         frames_dir = os.path.join(outdir, "color_smpl")
         video_path = os.path.join(outdir, "output_video.mp4")
         output_fps = 30 // subsample
@@ -639,7 +641,7 @@ def run_inference(args):
         msks,
         ) = prepare_output(
         outputs, args.output_dir, 1, True, 
-        args.render, args.render_video, img_res, args.subsample
+        args.save, args.render, args.render_video, img_res, args.subsample
     )
 
     # Convert tensors to numpy arrays for visualization.
@@ -651,7 +653,7 @@ def run_inference(args):
     verts_to_vis = [p.cpu().numpy() for p in all_smpl_verts]
 
     # Create and run the point cloud viewer.
-    print("Launching point cloud viewer...")
+    print("Launching Human3R viewer...")
     viewer = SceneHumanViewer(
         pts3ds_to_vis,
         colors_to_vis,
