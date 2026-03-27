@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Human3R Viewer</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0f;
+    color: #e0e0e0;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    overflow: hidden;
+    height: 100vh;
+  }
+
+  #loading-screen {
+    position: fixed; inset: 0;
+    background: #0a0a0f;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    z-index: 1000;
+    transition: opacity 0.5s;
+  }
+  #loading-screen.hidden { opacity: 0; pointer-events: none; }
+  .loader-ring {
+    width: 60px; height: 60px;
+    border: 3px solid rgba(100,180,255,0.15);
+    border-top-color: #64b4ff;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loading-text {
+    margin-top: 20px; font-size: 14px;
+    color: #8899aa; letter-spacing: 1px;
+  }
+  #loading-progress {
+    margin-top: 10px; font-size: 12px;
+    color: #556677;
+  }
+
+  #canvas-container {
+    position: fixed; inset: 0;
+  }
+  canvas { display: block; width: 100%; height: 100%; }
+
+  /* Controls Panel */
+  #controls {
+    position: fixed; top: 16px; right: 16px;
+    width: 280px;
+    background: rgba(15, 15, 25, 0.92);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(100,150,255,0.12);
+    border-radius: 12px;
+    padding: 16px;
+    z-index: 10;
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+    font-size: 13px;
+  }
+  #controls::-webkit-scrollbar { width: 4px; }
+  #controls::-webkit-scrollbar-thumb { background: rgba(100,150,255,0.3); border-radius: 4px; }
+
+  #controls h2 {
+    font-size: 15px; font-weight: 600;
+    color: #a0c4ff; margin-bottom: 14px;
+    letter-spacing: 0.5px;
+  }
+
+  .ctrl-section {
+    margin-bottom: 14px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(100,150,255,0.08);
+  }
+  .ctrl-section:last-child { border-bottom: none; margin-bottom: 0; }
+
+  .ctrl-section h3 {
+    font-size: 11px; font-weight: 600;
+    color: #7799bb; text-transform: uppercase;
+    letter-spacing: 1.2px; margin-bottom: 8px;
+  }
+
+  .ctrl-row {
+    display: flex; align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .ctrl-row label { color: #99aabb; font-size: 12px; }
+  .ctrl-row .value { color: #c0d0e0; font-size: 11px; min-width: 30px; text-align: right; }
+
+  input[type="range"] {
+    -webkit-appearance: none; appearance: none;
+    width: 120px; height: 4px;
+    background: rgba(100,150,255,0.15);
+    border-radius: 2px; outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 14px; height: 14px;
+    background: #64b4ff; border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 0 6px rgba(100,180,255,0.4);
+  }
+
+  input[type="checkbox"] {
+    accent-color: #64b4ff;
+    cursor: pointer;
+  }
+
+  /* Mode buttons */
+  .mode-buttons {
+    display: flex; gap: 4px; margin-bottom: 8px;
+  }
+  .mode-btn {
+    flex: 1; padding: 6px 4px;
+    background: rgba(100,150,255,0.08);
+    border: 1px solid rgba(100,150,255,0.15);
+    border-radius: 6px; color: #8899aa;
+    font-size: 11px; font-weight: 500;
+    cursor: pointer; text-align: center;
+    transition: all 0.2s;
+  }
+  .mode-btn:hover { background: rgba(100,150,255,0.15); color: #aabbcc; }
+  .mode-btn.active {
+    background: rgba(100,180,255,0.2);
+    border-color: #64b4ff;
+    color: #64b4ff;
+  }
+
+  /* Playback */
+  .playback-row {
+    display: flex; gap: 6px; margin-bottom: 8px; align-items: center;
+  }
+  .play-btn {
+    width: 32px; height: 32px;
+    background: rgba(100,180,255,0.15);
+    border: 1px solid rgba(100,180,255,0.3);
+    border-radius: 50%; color: #64b4ff;
+    font-size: 14px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.2s;
+  }
+  .play-btn:hover { background: rgba(100,180,255,0.25); }
+  #frame-slider { flex: 1; }
+
+  #frame-display {
+    color: #64b4ff; font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    min-width: 55px; text-align: right;
+  }
+
+  /* Info bar */
+  #info-bar {
+    position: fixed; bottom: 16px; left: 16px;
+    background: rgba(15, 15, 25, 0.85);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(100,150,255,0.1);
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 11px; color: #667788;
+    z-index: 10;
+  }
+</style>
+</head>
+<body>
+
+<div id="loading-screen">
+  <div class="loader-ring"></div>
+  <div id="loading-text">Loading Human3R Data...</div>
+  <div id="loading-progress"></div>
+</div>
+
+<div id="canvas-container"></div>
+
+<div id="controls">
+  <h2>🧍 Human3R Viewer</h2>
+
+  <div class="ctrl-section">
+    <h3>View Mode</h3>
+    <div class="mode-buttons">
+      <button class="mode-btn" id="mode-4d" title="Only show current frame">4D</button>
+      <button class="mode-btn active" id="mode-3d" title="Show all frames">3D</button>
+      <button class="mode-btn" id="mode-hybrid" title="Current SMPL + all points">Hybrid</button>
+    </div>
+  </div>
+
+  <div class="ctrl-section">
+    <h3>Playback</h3>
+    <div class="playback-row">
+      <button class="play-btn" id="play-btn" title="Play/Pause">▶</button>
+      <input type="range" id="frame-slider" min="0" max="0" value="0" step="1">
+      <span id="frame-display">0 / 0</span>
+    </div>
+    <div class="ctrl-row">
+      <label>FPS</label>
+      <input type="range" id="fps-slider" min="1" max="60" value="10" step="1">
+      <span class="value" id="fps-value">10</span>
+    </div>
+  </div>
+
+  <div class="ctrl-section">
+    <h3>Visibility</h3>
+    <div class="ctrl-row">
+      <label><input type="checkbox" id="show-bg" checked> Background</label>
+    </div>
+    <div class="ctrl-row">
+      <label><input type="checkbox" id="show-fg"> Foreground</label>
+    </div>
+    <div class="ctrl-row">
+      <label><input type="checkbox" id="show-smpl" checked> SMPL Meshes</label>
+    </div>
+    <div class="ctrl-row">
+      <label><input type="checkbox" id="show-cameras" checked> Cameras</label>
+    </div>
+  </div>
+
+  <div class="ctrl-section">
+    <h3>Quality</h3>
+    <div class="ctrl-row">
+      <label>Point Size</label>
+      <input type="range" id="point-size" min="0.5" max="8" value="2" step="0.1">
+      <span class="value" id="point-size-value">2.0</span>
+    </div>
+    <div class="ctrl-row">
+      <label>Confidence</label>
+      <input type="range" id="conf-threshold" min="0.1" max="20" value="1.5" step="0.1">
+      <span class="value" id="conf-value">1.5</span>
+    </div>
+    <div class="ctrl-row">
+      <label>Downsample</label>
+      <input type="range" id="downsample" min="1" max="50" value="8" step="1">
+      <span class="value" id="downsample-value">8</span>
+    </div>
+    <div class="ctrl-row">
+      <label>Mask Thresh</label>
+      <input type="range" id="msk-threshold" min="0" max="1" value="0.1" step="0.01">
+      <span class="value" id="msk-value">0.10</span>
+    </div>
+    <div class="ctrl-row">
+      <label>Camera Size</label>
+      <input type="range" id="cam-size" min="0.02" max="0.5" value="0.1" step="0.01">
+      <span class="value" id="cam-size-value">0.10</span>
+    </div>
+  </div>
+</div>
+
+<div id="info-bar">
+  <span id="info-text">Human3R Viewer — Orbit: Left Click | Pan: Right Click | Zoom: Scroll</span>
+</div>
+
+<!-- Three.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r152/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.0/examples/js/controls/OrbitControls.js"></script>
+
+<script>
+(function() {
+  "use strict";
+
+  // ─── State ───────────────────────────────────────────────────
+  let viewerData = null;
+  let scene, camera, renderer, controls;
+  let pointClouds = [];  // per-frame THREE.Points
+  let smplMeshes = [];   // per-frame array of THREE.Mesh
+  let cameraFrustums = []; // per-frame THREE.Group
+  let currentFrame = 0;
+  let playing = false;
+  let lastFrameTime = 0;
+  let viewMode = "3d"; // "3d" | "4d" | "hybrid"
+
+  // ─── Init Three.js ──────────────────────────────────────────
+  function initThree() {
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0a0a12);
+
+    // Subtle grid
+    const gridHelper = new THREE.GridHelper(20, 40, 0x1a1a2e, 0x12121e);
+    gridHelper.rotation.x = Math.PI; // Y-down
+    scene.add(gridHelper);
+
+    camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 1000);
+    camera.position.set(0, -2, 5);
+    camera.up.set(0, -1, 0); // Y-down to match viser
+
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    document.getElementById("canvas-container").appendChild(renderer.domElement);
+
+    controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.rotateSpeed = 0.8;
+    controls.panSpeed = 0.5;
+    controls.zoomSpeed = 1.2;
+
+    // Ambient light
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+    // Directional light
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(5, -10, 7);
+    scene.add(dirLight);
+    const dirLight2 = new THREE.DirectionalLight(0xffffff, 0.3);
+    dirLight2.position.set(-5, 5, -3);
+    scene.add(dirLight2);
+
+    window.addEventListener("resize", () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  }
+
+  // ─── Viridis Colormap ───────────────────────────────────────
+  function viridis(t) {
+    // Simplified viridis approximation
+    const c0 = [0.267, 0.004, 0.329];
+    const c1 = [0.282, 0.140, 0.458];
+    const c2 = [0.254, 0.265, 0.530];
+    const c3 = [0.207, 0.372, 0.553];
+    const c4 = [0.164, 0.471, 0.558];
+    const c5 = [0.128, 0.567, 0.551];
+    const c6 = [0.135, 0.659, 0.518];
+    const c7 = [0.267, 0.749, 0.441];
+    const c8 = [0.478, 0.821, 0.318];
+    const c9 = [0.741, 0.873, 0.150];
+    const c10 = [0.993, 0.906, 0.144];
+    const stops = [c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10];
+    const idx = t * (stops.length - 1);
+    const lo = Math.floor(idx);
+    const hi = Math.min(lo + 1, stops.length - 1);
+    const frac = idx - lo;
+    return [
+      stops[lo][0] + frac * (stops[hi][0] - stops[lo][0]),
+      stops[lo][1] + frac * (stops[hi][1] - stops[lo][1]),
+      stops[lo][2] + frac * (stops[hi][2] - stops[lo][2]),
+    ];
+  }
+
+  // ─── Build Scene ────────────────────────────────────────────
+  function buildScene() {
+    const data = viewerData;
+    const B = data.num_frames;
+    const confThresh = parseFloat(document.getElementById("conf-threshold").value);
+    const downsample = parseInt(document.getElementById("downsample").value);
+    const mskThresh = parseFloat(document.getElementById("msk-threshold").value);
+    const showBg = document.getElementById("show-bg").checked;
+    const showFg = document.getElementById("show-fg").checked;
+    const pointSize = parseFloat(document.getElementById("point-size").value);
+
+    // Clear existing
+    pointClouds.forEach(pc => scene.remove(pc));
+    smplMeshes.forEach(arr => arr.forEach(m => scene.remove(m)));
+    cameraFrustums.forEach(g => scene.remove(g));
+    pointClouds = [];
+    smplMeshes = [];
+    cameraFrustums = [];
+
+    // Build faces geometry for SMPL (shared)
+    let smplFacesArr = null;
+    if (data.smpl_faces && data.smpl_faces.length > 0) {
+      smplFacesArr = data.smpl_faces;
+    }
+
+    for (let i = 0; i < B; i++) {
+      const frame = data.frames[i];
+
+      // ── Point Cloud ──
+      const pts = frame.pts;
+      const cols = frame.colors;
+      const conf = frame.conf;
+      const msk = frame.msk;
+      const N = pts.length;
+
+      // Filter and downsample
+      const positions = [];
+      const colors3 = [];
+
+      for (let j = 0; j < N; j += downsample) {
+        if (conf[j] <= confThresh) continue;
+
+        const isFg = msk[j] > mskThresh;
+        if (!showBg && !isFg) continue;
+        if (!showFg && isFg) continue;
+        if (showBg && showFg) { /* show all */ }
+        else if (showBg && !showFg && isFg) continue;
+        else if (showFg && !showBg && !isFg) continue;
+
+        positions.push(pts[j][0], pts[j][1], pts[j][2]);
+        colors3.push(cols[j][0], cols[j][1], cols[j][2]);
+      }
+
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      geom.setAttribute("color", new THREE.Float32BufferAttribute(colors3, 3));
+
+      const mat = new THREE.PointsMaterial({
+        size: pointSize * 0.003,
+        vertexColors: true,
+        sizeAttenuation: true,
+      });
+      const pc = new THREE.Points(geom, mat);
+      scene.add(pc);
+      pointClouds.push(pc);
+
+      // ── SMPL Meshes ──
+      const frameMeshes = [];
+      if (smplFacesArr && frame.meshes.length > 0) {
+        for (let m = 0; m < frame.meshes.length; m++) {
+          const verts = frame.meshes[m];
+          const meshGeom = new THREE.BufferGeometry();
+          const meshPos = new Float32Array(verts.length * 3);
+          for (let v = 0; v < verts.length; v++) {
+            meshPos[v * 3] = verts[v][0];
+            meshPos[v * 3 + 1] = verts[v][1];
+            meshPos[v * 3 + 2] = verts[v][2];
+          }
+          meshGeom.setAttribute("position", new THREE.BufferAttribute(meshPos, 3));
+
+          // Set faces
+          const indices = [];
+          for (let f = 0; f < smplFacesArr.length; f++) {
+            indices.push(smplFacesArr[f][0], smplFacesArr[f][1], smplFacesArr[f][2]);
+          }
+          meshGeom.setIndex(indices);
+          meshGeom.computeVertexNormals();
+
+          const c = frame.mesh_colors[m];
+          const meshMat = new THREE.MeshPhongMaterial({
+            color: new THREE.Color(c[0] / 255, c[1] / 255, c[2] / 255),
+            transparent: true,
+            opacity: 0.85,
+            side: THREE.DoubleSide,
+            flatShading: false,
+          });
+          const mesh = new THREE.Mesh(meshGeom, meshMat);
+          scene.add(mesh);
+          frameMeshes.push(mesh);
+        }
+      }
+      smplMeshes.push(frameMeshes);
+
+      // ── Camera Frustum ──
+      const frustum = createCameraFrustum(
+        frame.cam_R, frame.cam_t, frame.focal, frame.pp,
+        i / Math.max(1, B - 1)
+      );
+      scene.add(frustum);
+      cameraFrustums.push(frustum);
+    }
+
+    // Set initial visibility
+    updateVisibility();
+
+    // Set initial camera to look at first frame's camera position
+    if (B > 0) {
+      const t = data.frames[0].cam_t;
+      controls.target.set(t[0], t[1], t[2]);
+      camera.position.set(t[0], t[1] - 3, t[2] + 5);
+      controls.update();
+    }
+  }
+
+  // ─── Camera Frustum ─────────────────────────────────────────
+  function createCameraFrustum(R, t, focal, pp, colorT) {
+    const group = new THREE.Group();
+    const camSize = parseFloat(document.getElementById("cam-size").value);
+
+    const vc = viridis(colorT);
+    const color = new THREE.Color(vc[0], vc[1], vc[2]);
+
+    // Frustum pyramid
+    const aspect = pp[0] / pp[1];
+    const halfW = camSize * aspect * 0.5;
+    const halfH = camSize * 0.5;
+    const depth = camSize;
+
+    const corners = [
+      new THREE.Vector3(-halfW, -halfH, depth),
+      new THREE.Vector3(halfW, -halfH, depth),
+      new THREE.Vector3(halfW, halfH, depth),
+      new THREE.Vector3(-halfW, halfH, depth),
+    ];
+    const origin = new THREE.Vector3(0, 0, 0);
+
+    const lineGeom = new THREE.BufferGeometry();
+    const linePositions = [];
+    // Lines from origin to corners
+    for (const c of corners) {
+      linePositions.push(origin.x, origin.y, origin.z, c.x, c.y, c.z);
+    }
+    // Rectangle at far end
+    for (let i = 0; i < 4; i++) {
+      const a = corners[i];
+      const b = corners[(i + 1) % 4];
+      linePositions.push(a.x, a.y, a.z, b.x, b.y, b.z);
+    }
+    lineGeom.setAttribute("position", new THREE.Float32BufferAttribute(linePositions, 3));
+
+    const lineMat = new THREE.LineBasicMaterial({ color: color, linewidth: 1.5 });
+    const cam = new THREE.LineSegments(lineGeom, lineMat);
+
+    // Apply rotation and translation (cam2world)
+    const rotMatrix = new THREE.Matrix4();
+    rotMatrix.set(
+      R[0][0], R[0][1], R[0][2], t[0],
+      R[1][0], R[1][1], R[1][2], t[1],
+      R[2][0], R[2][1], R[2][2], t[2],
+      0, 0, 0, 1
+    );
+    cam.applyMatrix4(rotMatrix);
+
+    group.add(cam);
+    return group;
+  }
+
+  // ─── Visibility Update ──────────────────────────────────────
+  function updateVisibility() {
+    const B = viewerData.num_frames;
+    const showSmpl = document.getElementById("show-smpl").checked;
+    const showCameras = document.getElementById("show-cameras").checked;
+
+    for (let i = 0; i < B; i++) {
+      let pcVisible = false;
+      let smplVisible = false;
+
+      if (viewMode === "3d") {
+        pcVisible = true;
+        smplVisible = showSmpl;
+      } else if (viewMode === "4d") {
+        pcVisible = (i === currentFrame);
+        smplVisible = (i === currentFrame) && showSmpl;
+      } else if (viewMode === "hybrid") {
+        pcVisible = (i <= currentFrame);
+        smplVisible = (i === currentFrame) && showSmpl;
+      }
+
+      if (pointClouds[i]) pointClouds[i].visible = pcVisible;
+      if (smplMeshes[i]) {
+        smplMeshes[i].forEach(m => { m.visible = smplVisible; });
+      }
+      if (cameraFrustums[i]) cameraFrustums[i].visible = showCameras;
+    }
+  }
+
+  // ─── Rebuild Point Clouds (when quality settings change) ───
+  function rebuildPointClouds() {
+    const data = viewerData;
+    const B = data.num_frames;
+    const confThresh = parseFloat(document.getElementById("conf-threshold").value);
+    const downsample = parseInt(document.getElementById("downsample").value);
+    const mskThresh = parseFloat(document.getElementById("msk-threshold").value);
+    const showBg = document.getElementById("show-bg").checked;
+    const showFg = document.getElementById("show-fg").checked;
+    const pointSize = parseFloat(document.getElementById("point-size").value);
+
+    for (let i = 0; i < B; i++) {
+      const frame = data.frames[i];
+      const pts = frame.pts;
+      const cols = frame.colors;
+      const conf = frame.conf;
+      const msk = frame.msk;
+      const N = pts.length;
+
+      const positions = [];
+      const colors3 = [];
+
+      for (let j = 0; j < N; j += downsample) {
+        if (conf[j] <= confThresh) continue;
+
+        const isFg = msk[j] > mskThresh;
+        if (showBg && showFg) { /* show all */ }
+        else if (showBg && !showFg && isFg) continue;
+        else if (showFg && !showBg && !isFg) continue;
+        else if (!showBg && !showFg) continue;
+
+        positions.push(pts[j][0], pts[j][1], pts[j][2]);
+        colors3.push(cols[j][0], cols[j][1], cols[j][2]);
+      }
+
+      // Replace geometry
+      const oldGeom = pointClouds[i].geometry;
+      const newGeom = new THREE.BufferGeometry();
+      newGeom.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      newGeom.setAttribute("color", new THREE.Float32BufferAttribute(colors3, 3));
+      pointClouds[i].geometry = newGeom;
+      oldGeom.dispose();
+
+      // Update point size
+      pointClouds[i].material.size = pointSize * 0.003;
+    }
+
+    updateVisibility();
+  }
+
+  // ─── Rebuild Camera Frustums ────────────────────────────────
+  function rebuildCameras() {
+    const B = viewerData.num_frames;
+    cameraFrustums.forEach(g => scene.remove(g));
+    cameraFrustums = [];
+    for (let i = 0; i < B; i++) {
+      const frame = viewerData.frames[i];
+      const frustum = createCameraFrustum(
+        frame.cam_R, frame.cam_t, frame.focal, frame.pp,
+        i / Math.max(1, B - 1)
+      );
+      scene.add(frustum);
+      cameraFrustums.push(frustum);
+    }
+    updateVisibility();
+  }
+
+  // ─── Controls Wiring ───────────────────────────────────────
+  function wireControls() {
+    // Mode buttons
+    document.querySelectorAll(".mode-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".mode-btn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        viewMode = btn.id.replace("mode-", "");
+        updateVisibility();
+      });
+    });
+
+    // Play button
+    const playBtn = document.getElementById("play-btn");
+    playBtn.addEventListener("click", () => {
+      playing = !playing;
+      playBtn.textContent = playing ? "⏸" : "▶";
+    });
+
+    // Frame slider
+    const frameSlider = document.getElementById("frame-slider");
+    frameSlider.addEventListener("input", () => {
+      currentFrame = parseInt(frameSlider.value);
+      document.getElementById("frame-display").textContent =
+        `${currentFrame} / ${viewerData.num_frames - 1}`;
+      updateVisibility();
+    });
+
+    // FPS slider
+    const fpsSlider = document.getElementById("fps-slider");
+    fpsSlider.addEventListener("input", () => {
+      document.getElementById("fps-value").textContent = fpsSlider.value;
+    });
+
+    // Point size
+    const psSlider = document.getElementById("point-size");
+    psSlider.addEventListener("input", () => {
+      const v = parseFloat(psSlider.value);
+      document.getElementById("point-size-value").textContent = v.toFixed(1);
+      pointClouds.forEach(pc => { pc.material.size = v * 0.003; });
+    });
+
+    // Confidence threshold (debounced rebuild)
+    let confTimeout = null;
+    const confSlider = document.getElementById("conf-threshold");
+    confSlider.addEventListener("input", () => {
+      document.getElementById("conf-value").textContent =
+        parseFloat(confSlider.value).toFixed(1);
+      clearTimeout(confTimeout);
+      confTimeout = setTimeout(rebuildPointClouds, 200);
+    });
+
+    // Downsample (debounced rebuild)
+    let dsTimeout = null;
+    const dsSlider = document.getElementById("downsample");
+    dsSlider.addEventListener("input", () => {
+      document.getElementById("downsample-value").textContent = dsSlider.value;
+      clearTimeout(dsTimeout);
+      dsTimeout = setTimeout(rebuildPointClouds, 200);
+    });
+
+    // Mask threshold (debounced rebuild)
+    let mskTimeout = null;
+    const mskSlider = document.getElementById("msk-threshold");
+    mskSlider.addEventListener("input", () => {
+      document.getElementById("msk-value").textContent =
+        parseFloat(mskSlider.value).toFixed(2);
+      clearTimeout(mskTimeout);
+      mskTimeout = setTimeout(rebuildPointClouds, 200);
+    });
+
+    // Camera size
+    let camTimeout = null;
+    const camSlider = document.getElementById("cam-size");
+    camSlider.addEventListener("input", () => {
+      document.getElementById("cam-size-value").textContent =
+        parseFloat(camSlider.value).toFixed(2);
+      clearTimeout(camTimeout);
+      camTimeout = setTimeout(rebuildCameras, 200);
+    });
+
+    // Checkboxes
+    ["show-bg", "show-fg"].forEach(id => {
+      document.getElementById(id).addEventListener("change", rebuildPointClouds);
+    });
+    ["show-smpl", "show-cameras"].forEach(id => {
+      document.getElementById(id).addEventListener("change", updateVisibility);
+    });
+
+    // Keyboard shortcuts
+    document.addEventListener("keydown", (e) => {
+      if (e.target.tagName === "INPUT") return;
+      if (e.key === " ") {
+        e.preventDefault();
+        playing = !playing;
+        playBtn.textContent = playing ? "⏸" : "▶";
+      } else if (e.key === "ArrowRight") {
+        currentFrame = (currentFrame + 1) % viewerData.num_frames;
+        frameSlider.value = currentFrame;
+        document.getElementById("frame-display").textContent =
+          `${currentFrame} / ${viewerData.num_frames - 1}`;
+        updateVisibility();
+      } else if (e.key === "ArrowLeft") {
+        currentFrame = (currentFrame - 1 + viewerData.num_frames) % viewerData.num_frames;
+        frameSlider.value = currentFrame;
+        document.getElementById("frame-display").textContent =
+          `${currentFrame} / ${viewerData.num_frames - 1}`;
+        updateVisibility();
+      }
+    });
+  }
+
+  // ─── Animation Loop ─────────────────────────────────────────
+  function animate(timestamp) {
+    requestAnimationFrame(animate);
+
+    if (playing) {
+      const fps = parseInt(document.getElementById("fps-slider").value);
+      const interval = 1000 / fps;
+      if (timestamp - lastFrameTime >= interval) {
+        lastFrameTime = timestamp;
+        currentFrame = (currentFrame + 1) % viewerData.num_frames;
+        document.getElementById("frame-slider").value = currentFrame;
+        document.getElementById("frame-display").textContent =
+          `${currentFrame} / ${viewerData.num_frames - 1}`;
+        updateVisibility();
+      }
+    }
+
+    controls.update();
+    renderer.render(scene, camera);
+  }
+
+  // ─── Load Data & Start ──────────────────────────────────────
+  async function start() {
+    const loadingProgress = document.getElementById("loading-progress");
+
+    loadingProgress.textContent = "Fetching preprocessed data...";
+
+    try {
+      const resp = await fetch("/api/data");
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+      loadingProgress.textContent = "Parsing JSON...";
+      viewerData = await resp.json();
+
+      loadingProgress.textContent = `Loaded ${viewerData.num_frames} frames. Building scene...`;
+
+      // Apply defaults
+      if (viewerData.defaults) {
+        if (viewerData.defaults.vis_threshold) {
+          document.getElementById("conf-threshold").value = viewerData.defaults.vis_threshold;
+          document.getElementById("conf-value").textContent =
+            viewerData.defaults.vis_threshold.toFixed(1);
+        }
+        if (viewerData.defaults.downsample_factor) {
+          document.getElementById("downsample").value = viewerData.defaults.downsample_factor;
+          document.getElementById("downsample-value").textContent =
+            viewerData.defaults.downsample_factor;
+        }
+      }
+
+      // Set up slider
+      document.getElementById("frame-slider").max = viewerData.num_frames - 1;
+      document.getElementById("frame-display").textContent =
+        `0 / ${viewerData.num_frames - 1}`;
+
+      initThree();
+      buildScene();
+      wireControls();
+
+      // Hide loading screen
+      document.getElementById("loading-screen").classList.add("hidden");
+
+      // Update info
+      document.getElementById("info-text").textContent =
+        `Human3R Viewer — ${viewerData.num_frames} frames, ${viewerData.width}×${viewerData.height} — Orbit: Left Click | Pan: Right Click | Zoom: Scroll | Space: Play/Pause | ←→: Step`;
+
+      requestAnimationFrame(animate);
+
+    } catch (err) {
+      loadingProgress.textContent = `Error: ${err.message}`;
+      document.getElementById("loading-text").textContent = "Failed to load data";
+      console.error(err);
+    }
+  }
+
+  start();
+})();
+</script>
+</body>
+</html>
