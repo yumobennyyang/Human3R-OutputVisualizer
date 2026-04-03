@@ -343,12 +343,33 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     const dt = descr.replace(/[<>=|]/g, '');
     if (dt === 'f4') typedArray = new Float32Array(dataBuffer);
     else if (dt === 'f8') typedArray = new Float64Array(dataBuffer);
+    else if (dt === 'f2') {
+      // float16 → convert to Float32
+      const u16 = new Uint16Array(dataBuffer);
+      const f32 = new Float32Array(u16.length);
+      for (let i = 0; i < u16.length; i++) {
+        const h = u16[i];
+        const sign = (h >> 15) & 1;
+        const exp  = (h >> 10) & 0x1f;
+        const frac = h & 0x3ff;
+        if (exp === 0) f32[i] = (sign ? -1 : 1) * Math.pow(2, -14) * (frac / 1024);
+        else if (exp === 31) f32[i] = frac ? NaN : (sign ? -Infinity : Infinity);
+        else f32[i] = (sign ? -1 : 1) * Math.pow(2, exp - 15) * (1 + frac / 1024);
+      }
+      typedArray = f32;
+    }
     else if (dt === 'i4') typedArray = new Int32Array(dataBuffer);
     else if (dt === 'i8') typedArray = new BigInt64Array(dataBuffer);
     else if (dt === 'u1' || dt === 'b1') typedArray = new Uint8Array(dataBuffer);
+    else if (dt === 'i1') typedArray = new Int8Array(dataBuffer);
     else if (dt === 'i2') typedArray = new Int16Array(dataBuffer);
+    else if (dt === 'u2') typedArray = new Uint16Array(dataBuffer);
     else if (dt === 'u4') typedArray = new Uint32Array(dataBuffer);
-    else typedArray = new Float32Array(dataBuffer); // fallback
+    else {
+      // Unknown dtype – use Uint8Array so we never get an alignment error
+      console.warn(`parseNpy: unhandled dtype "${descr}", returning Uint8Array`);
+      typedArray = new Uint8Array(dataBuffer);
+    }
 
     return { data: typedArray, shape, descr };
   }
