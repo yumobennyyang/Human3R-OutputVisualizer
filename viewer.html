@@ -248,6 +248,7 @@
     <div class="ctrl-row"><label><input type="checkbox" id="show-bg" checked> Background</label></div>
     <div class="ctrl-row"><label><input type="checkbox" id="show-fg"> Foreground</label></div>
     <div class="ctrl-row"><label><input type="checkbox" id="show-cam" checked> Cameras</label></div>
+    <div class="ctrl-row"><label><input type="checkbox" id="show-smpl" checked> SMPL Bodies</label></div>
   </div>
 
   <div class="ctrl-section">
@@ -276,6 +277,11 @@
       <label>Cam Size</label>
       <input type="range" id="cam-size" min="0.02" max="0.5" value="0.1" step="0.01">
       <span class="val" id="cam-size-val">0.10</span>
+    </div>
+    <div class="ctrl-row">
+      <label>SMPL Opacity</label>
+      <input type="range" id="smpl-opacity" min="0.1" max="1.0" value="0.85" step="0.05">
+      <span class="val" id="smpl-opacity-val">0.85</span>
     </div>
   </div>
 
@@ -450,13 +456,67 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
       if (!camFile) { status.textContent = `❌ Missing camera/${fid}.npz`; return null; }
       const camNpz = await parseNpz(await camFile.arrayBuffer());
 
-      // Load smpl npz (just for mask)
+      // Load smpl npz (mask + mesh vertices/faces)
       const smplFile = fileMap[`smpl/${fid}.npz`];
       let mskData = null;
+      let smplVerts = [];  // array of Float32Array per person
+      let smplFaces = null; // faces (shared across persons)
       if (smplFile) {
         const smplNpz = await parseNpz(await smplFile.arrayBuffer());
+
+        // Log keys on first frame for debugging
+        if (i === 0) {
+          console.log('SMPL npz keys:', Object.keys(smplNpz));
+          for (const [k, v] of Object.entries(smplNpz)) {
+            console.log(`  ${k}: shape=${v.shape}, dtype=${v.descr}`);
+          }
+        }
+
         if (smplNpz.msk && smplNpz.msk.data.length > 1) {
           mskData = smplNpz.msk;
+        }
+
+        // Try common key names for vertices: verts, vertices, v
+        const vertsEntry = smplNpz.verts || smplNpz.vertices || smplNpz.v;
+        if (vertsEntry) {
+          const vd = vertsEntry;
+          const vs = vd.shape;
+          // Convert float16/float64 to float32 if needed
+          let vdata = vd.data;
+          if (!(vdata instanceof Float32Array)) {
+            const f32 = new Float32Array(vdata.length);
+            for (let k = 0; k < vdata.length; k++) f32[k] = Number(vdata[k]);
+            vdata = f32;
+          }
+
+          if (vs.length === 3) {
+            // (num_people, num_verts, 3)
+            const nPeople = vs[0];
+            const nVerts = vs[1];
+            for (let p = 0; p < nPeople; p++) {
+              const personVerts = new Float32Array(nVerts * 3);
+              for (let k = 0; k < nVerts * 3; k++) {
+                personVerts[k] = vdata[p * nVerts * 3 + k];
+              }
+              smplVerts.push(personVerts);
+            }
+          } else if (vs.length === 2) {
+            // (num_verts, 3) - single person
+            smplVerts.push(new Float32Array(vdata));
+          }
+        }
+
+        // Try common key names for faces: faces, f
+        const facesEntry = smplNpz.faces || smplNpz.f;
+        if (facesEntry) {
+          const fd = facesEntry.data;
+          if (fd instanceof BigInt64Array) {
+            smplFaces = new Uint32Array(fd.length);
+            for (let k = 0; k < fd.length; k++) smplFaces[k] = Number(fd[k]);
+          } else {
+            smplFaces = new Uint32Array(fd.length);
+            for (let k = 0; k < fd.length; k++) smplFaces[k] = fd[k];
+          }
         }
       }
 
@@ -519,11 +579,13 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
       frames.push({
         H, W, pts, cols, conf: confArr, msk: mskArr,
-        camR: R, camT: t, focal: fx, pp: [cx, cy]
+        camR: R, camT: t, focal: fx, pp: [cx, cy],
+        smplVerts, smplFaces
       });
     }
 
-    status.textContent = `✓ Loaded ${B} frames. Building scene...`;
+    const smplCount = frames.filter(f => f.smplVerts && f.smplVerts.length > 0).length;
+    status.textContent = `✓ Loaded ${B} frames (${smplCount} with SMPL bodies). Building scene...`;
     return frames;
   }
 
@@ -534,6 +596,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
   let scene, camera, renderer, controls;
   let pointClouds = [];
   let cameraFrustums = [];
+  let smplMeshes = []; // array of arrays: smplMeshes[frameIdx] = [mesh1, mesh2, ...]
   let frames = [];
   let currentFrame = 0;
   let playing = false;
@@ -679,6 +742,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
   function updateVisibility() {
     const showCam = document.getElementById('show-cam').checked;
+    const showSmpl = document.getElementById('show-smpl').checked;
     const B = frames.length;
     for (let i = 0; i < B; i++) {
       let pcVis = false;
@@ -688,7 +752,75 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
       if (pointClouds[i]) pointClouds[i].visible = pcVis;
       if (cameraFrustums[i]) cameraFrustums[i].visible = showCam;
+
+      // SMPL meshes: show per-frame like point clouds, but also respect checkbox
+      if (smplMeshes[i]) {
+        for (const mesh of smplMeshes[i]) {
+          mesh.visible = pcVis && showSmpl;
+        }
+      }
     }
+  }
+
+  function buildSMPLMeshes() {
+    // Remove old meshes
+    smplMeshes.forEach(arr => {
+      if (arr) arr.forEach(m => { m.geometry.dispose(); m.material.dispose(); scene.remove(m); });
+    });
+    smplMeshes = [];
+
+    const opacity = parseFloat(document.getElementById('smpl-opacity').value);
+
+    // Distinct colors for different people per frame
+    const personColors = [
+      0x00d4ff, // cyan
+      0xff6b6b, // coral red
+      0x51cf66, // green
+      0xffd43b, // yellow
+      0xcc5de8, // purple
+      0xff922b, // orange
+      0x20c997, // teal
+      0xf06595, // pink
+    ];
+
+    let totalMeshes = 0;
+
+    for (let i = 0; i < frames.length; i++) {
+      const f = frames[i];
+      const frameMeshes = [];
+
+      if (f.smplVerts && f.smplVerts.length > 0 && f.smplFaces) {
+        for (let p = 0; p < f.smplVerts.length; p++) {
+          const verts = f.smplVerts[p];
+          if (!verts || verts.length < 9) continue; // skip degenerate
+
+          const geom = new THREE.BufferGeometry();
+          geom.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(verts), 3));
+          geom.setIndex(new THREE.BufferAttribute(f.smplFaces, 1));
+          geom.computeVertexNormals();
+
+          const color = personColors[p % personColors.length];
+          const mat = new THREE.MeshPhongMaterial({
+            color: color,
+            transparent: opacity < 1.0,
+            opacity: opacity,
+            side: THREE.DoubleSide,
+            shininess: 60,
+            specular: 0x222222,
+            flatShading: false,
+          });
+
+          const mesh = new THREE.Mesh(geom, mat);
+          scene.add(mesh);
+          frameMeshes.push(mesh);
+          totalMeshes++;
+        }
+      }
+
+      smplMeshes.push(frameMeshes);
+    }
+    console.log(`Built ${totalMeshes} SMPL meshes across ${frames.length} frames`);
+    updateVisibility();
   }
 
   function updatePointSize() {
@@ -750,11 +882,23 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     document.getElementById('cam-size').addEventListener('input', function() {
       document.getElementById('cam-size-val').textContent = parseFloat(this.value).toFixed(2);
     });
+    document.getElementById('smpl-opacity').addEventListener('input', function() {
+      document.getElementById('smpl-opacity-val').textContent = parseFloat(this.value).toFixed(2);
+      // Live-update opacity without full rebuild
+      const op = parseFloat(this.value);
+      smplMeshes.forEach(arr => {
+        if (arr) arr.forEach(m => {
+          m.material.opacity = op;
+          m.material.transparent = op < 1.0;
+        });
+      });
+    });
 
     // Rebuild button
     document.getElementById('rebuild-btn').addEventListener('click', () => {
       buildPointClouds();
       buildCameras();
+      buildSMPLMeshes();
     });
 
     // Visibility checkboxes
@@ -762,6 +906,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
       document.getElementById(id).addEventListener('change', buildPointClouds);
     });
     document.getElementById('show-cam').addEventListener('change', updateVisibility);
+    document.getElementById('show-smpl').addEventListener('change', updateVisibility);
 
     // Keyboard
     document.addEventListener('keydown', (e) => {
@@ -818,6 +963,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     initThree();
     buildPointClouds();
     buildCameras();
+    buildSMPLMeshes();
     wireControls();
 
     // Focus camera on first frame's camera position
