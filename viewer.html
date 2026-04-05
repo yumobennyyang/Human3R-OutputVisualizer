@@ -249,7 +249,33 @@
     <div class="ctrl-row"><label><input type="checkbox" id="show-fg"> Foreground</label></div>
     <div class="ctrl-row"><label><input type="checkbox" id="show-cam" checked> Cameras</label></div>
     <div class="ctrl-row"><label><input type="checkbox" id="show-smpl" checked> SMPL Bodies</label></div>
-    <div class="ctrl-row"><label><input type="checkbox" id="smpl-cam-xform"> Apply Cam Transform to SMPL</label></div>
+  </div>
+
+  <div class="ctrl-section">
+    <h3>SMPL Position</h3>
+    <div class="ctrl-row">
+      <label>X</label>
+      <input type="range" id="smpl-off-x" min="-5" max="5" value="0" step="0.05">
+      <span class="val" id="smpl-off-x-val">0.00</span>
+    </div>
+    <div class="ctrl-row">
+      <label>Y</label>
+      <input type="range" id="smpl-off-y" min="-5" max="5" value="0" step="0.05">
+      <span class="val" id="smpl-off-y-val">0.00</span>
+    </div>
+    <div class="ctrl-row">
+      <label>Z</label>
+      <input type="range" id="smpl-off-z" min="-5" max="5" value="0" step="0.05">
+      <span class="val" id="smpl-off-z-val">0.00</span>
+    </div>
+    <div class="ctrl-row">
+      <label>Scale</label>
+      <input type="range" id="smpl-scale" min="0.1" max="5" value="1" step="0.05">
+      <span class="val" id="smpl-scale-val">1.00</span>
+    </div>
+    <div style="display:flex;gap:3px;margin-top:4px;">
+      <button class="mode-btn" id="smpl-reset-pos" style="flex:1">Reset</button>
+    </div>
   </div>
 
   <div class="ctrl-section">
@@ -599,6 +625,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
   let pointClouds = [];
   let cameraFrustums = [];
   let smplMeshes = []; // array of arrays: smplMeshes[frameIdx] = [mesh1, mesh2, ...]
+  let smplGroup = null; // shared parent THREE.Group for position/scale offset
   let frames = [];
   let currentFrame = 0;
   let playing = false;
@@ -765,24 +792,25 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
   }
 
   function buildSMPLMeshes() {
-    // Remove old meshes
-    smplMeshes.forEach(arr => {
-      if (arr) arr.forEach(m => { m.geometry.dispose(); m.material.dispose(); scene.remove(m); });
-    });
+    // Remove old group
+    if (smplGroup) {
+      smplGroup.traverse(child => {
+        if (child.isMesh) { child.geometry.dispose(); child.material.dispose(); }
+      });
+      scene.remove(smplGroup);
+    }
     smplMeshes = [];
+    smplGroup = new THREE.Group();
+    scene.add(smplGroup);
+
+    // Apply current offset/scale
+    updateSMPLOffset();
 
     const opacity = parseFloat(document.getElementById('smpl-opacity').value);
 
-    // Distinct colors for different people per frame
     const personColors = [
-      0x00d4ff, // cyan
-      0xff6b6b, // coral red
-      0x51cf66, // green
-      0xffd43b, // yellow
-      0xcc5de8, // purple
-      0xff922b, // orange
-      0x20c997, // teal
-      0xf06595, // pink
+      0x00d4ff, 0xff6b6b, 0x51cf66, 0xffd43b,
+      0xcc5de8, 0xff922b, 0x20c997, 0xf06595,
     ];
 
     let totalMeshes = 0;
@@ -794,7 +822,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
       if (f.smplVerts && f.smplVerts.length > 0 && f.smplFaces) {
         for (let p = 0; p < f.smplVerts.length; p++) {
           const verts = f.smplVerts[p];
-          if (!verts || verts.length < 9) continue; // skip degenerate
+          if (!verts || verts.length < 9) continue;
 
           const geom = new THREE.BufferGeometry();
           geom.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(verts), 3));
@@ -803,32 +831,13 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
           const color = personColors[p % personColors.length];
           const mat = new THREE.MeshPhongMaterial({
-            color: color,
-            transparent: opacity < 1.0,
-            opacity: opacity,
-            side: THREE.DoubleSide,
-            shininess: 60,
-            specular: 0x222222,
-            flatShading: false,
+            color, transparent: opacity < 1.0, opacity,
+            side: THREE.DoubleSide, shininess: 60,
+            specular: 0x222222, flatShading: false,
           });
 
           const mesh = new THREE.Mesh(geom, mat);
-
-          // Optionally apply camera-to-world transform (same as point cloud)
-          const applyCamXform = document.getElementById('smpl-cam-xform').checked;
-          if (applyCamXform && f.camPose) {
-            const P = f.camPose; // 4x4 row-major
-            const m4 = new THREE.Matrix4();
-            m4.set(
-              P[0],  P[1],  P[2],  P[3],
-              P[4],  P[5],  P[6],  P[7],
-              P[8],  P[9],  P[10], P[11],
-              P[12], P[13], P[14], P[15]
-            );
-            mesh.applyMatrix4(m4);
-          }
-
-          scene.add(mesh);
+          smplGroup.add(mesh);
           frameMeshes.push(mesh);
           totalMeshes++;
         }
@@ -838,6 +847,16 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     }
     console.log(`Built ${totalMeshes} SMPL meshes across ${frames.length} frames`);
     updateVisibility();
+  }
+
+  function updateSMPLOffset() {
+    if (!smplGroup) return;
+    const ox = parseFloat(document.getElementById('smpl-off-x').value);
+    const oy = parseFloat(document.getElementById('smpl-off-y').value);
+    const oz = parseFloat(document.getElementById('smpl-off-z').value);
+    const sc = parseFloat(document.getElementById('smpl-scale').value);
+    smplGroup.position.set(ox, oy, oz);
+    smplGroup.scale.set(sc, sc, sc);
   }
 
   function updatePointSize() {
@@ -924,7 +943,27 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     });
     document.getElementById('show-cam').addEventListener('change', updateVisibility);
     document.getElementById('show-smpl').addEventListener('change', updateVisibility);
-    document.getElementById('smpl-cam-xform').addEventListener('change', buildSMPLMeshes);
+
+    // SMPL position offset sliders — live update without rebuild
+    ['smpl-off-x', 'smpl-off-y', 'smpl-off-z'].forEach(id => {
+      document.getElementById(id).addEventListener('input', function() {
+        document.getElementById(id + '-val').textContent = parseFloat(this.value).toFixed(2);
+        updateSMPLOffset();
+      });
+    });
+    document.getElementById('smpl-scale').addEventListener('input', function() {
+      document.getElementById('smpl-scale-val').textContent = parseFloat(this.value).toFixed(2);
+      updateSMPLOffset();
+    });
+    document.getElementById('smpl-reset-pos').addEventListener('click', () => {
+      ['smpl-off-x', 'smpl-off-y', 'smpl-off-z'].forEach(id => {
+        document.getElementById(id).value = 0;
+        document.getElementById(id + '-val').textContent = '0.00';
+      });
+      document.getElementById('smpl-scale').value = 1;
+      document.getElementById('smpl-scale-val').textContent = '1.00';
+      updateSMPLOffset();
+    });
 
     // Keyboard
     document.addEventListener('keydown', (e) => {
