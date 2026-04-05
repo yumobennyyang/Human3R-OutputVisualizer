@@ -249,6 +249,7 @@
     <div class="ctrl-row"><label><input type="checkbox" id="show-fg"> Foreground</label></div>
     <div class="ctrl-row"><label><input type="checkbox" id="show-cam" checked> Cameras</label></div>
     <div class="ctrl-row"><label><input type="checkbox" id="show-smpl" checked> SMPL Bodies</label></div>
+    <div class="ctrl-row"><label><input type="checkbox" id="smpl-cam-xform"> Apply Cam Transform to SMPL</label></div>
   </div>
 
   <div class="ctrl-section">
@@ -580,6 +581,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
       frames.push({
         H, W, pts, cols, conf: confArr, msk: mskArr,
         camR: R, camT: t, focal: fx, pp: [cx, cy],
+        camPose: pose, // full 4x4 row-major
         smplVerts, smplFaces
       });
     }
@@ -811,6 +813,21 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
           });
 
           const mesh = new THREE.Mesh(geom, mat);
+
+          // Optionally apply camera-to-world transform (same as point cloud)
+          const applyCamXform = document.getElementById('smpl-cam-xform').checked;
+          if (applyCamXform && f.camPose) {
+            const P = f.camPose; // 4x4 row-major
+            const m4 = new THREE.Matrix4();
+            m4.set(
+              P[0],  P[1],  P[2],  P[3],
+              P[4],  P[5],  P[6],  P[7],
+              P[8],  P[9],  P[10], P[11],
+              P[12], P[13], P[14], P[15]
+            );
+            mesh.applyMatrix4(m4);
+          }
+
           scene.add(mesh);
           frameMeshes.push(mesh);
           totalMeshes++;
@@ -907,6 +924,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     });
     document.getElementById('show-cam').addEventListener('change', updateVisibility);
     document.getElementById('show-smpl').addEventListener('change', updateVisibility);
+    document.getElementById('smpl-cam-xform').addEventListener('change', buildSMPLMeshes);
 
     // Keyboard
     document.addEventListener('keydown', (e) => {
